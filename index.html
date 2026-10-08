@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guitar Flash</title>
+<style>
+  :root {
+    --bg: #f6f3ee;
+    --ink: #2a2622;
+    --muted: #8a8178;
+    --wood: #5b3a24;
+    --wood-dark: #3f2717;
+    --fret: #c9c4bb;
+    --string: #e8e2d6;
+    --inlay: #efe6d4;
+    --accent: #2f6fdb;
+    --right: #2e9b57;
+    --wrong: #d2433b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+  }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 0.95rem; }
+  .stats { display: flex; gap: 24px; margin-bottom: 16px; font-variant-numeric: tabular-nums; }
+  .stat { text-align: center; }
+  .stat b { display: block; font-size: 1.4rem; }
+  .stat span { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .board-wrap { width: 100%; max-width: 1100px; overflow-x: auto; }
+  svg { display: block; width: 100%; min-width: 640px; height: auto; }
+  .feedback { height: 2em; margin: 18px 0 8px; font-size: 1.25rem; font-weight: 600; }
+  .feedback.right { color: var(--right); }
+  .feedback.wrong { color: var(--wrong); }
+  .notes { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .notes button {
+    width: 56px; height: 56px;
+    font: inherit; font-size: 1.3rem; font-weight: 600;
+    border: 2px solid #d8d1c5; border-radius: 12px;
+    background: #fff; color: var(--ink);
+    cursor: pointer;
+    transition: transform 0.08s, background 0.15s, border-color 0.15s;
+  }
+  .notes button:hover:not(:disabled) { border-color: var(--accent); }
+  .notes button:active:not(:disabled) { transform: scale(0.95); }
+  .notes button:disabled { cursor: default; }
+  .notes button.right { background: var(--right); border-color: var(--right); color: #fff; }
+  .notes button.wrong { background: var(--wrong); border-color: var(--wrong); color: #fff; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin-top: 16px; }
+  kbd {
+    font: inherit; font-size: 0.8rem;
+    padding: 1px 6px; border: 1px solid #d8d1c5; border-bottom-width: 2px;
+    border-radius: 4px; background: #fff;
+  }
+  #dot { transition: fill 0.15s; }
+  .levels { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 20px; }
+  .levels button {
+    font: inherit; font-size: 0.9rem;
+    padding: 8px 14px;
+    border: 2px solid #d8d1c5; border-radius: 999px;
+    background: #fff; color: var(--ink);
+    cursor: pointer;
+  }
+  .levels button:hover { border-color: var(--accent); }
+  .levels button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .fret-num { fill: var(--muted); opacity: 0.45; }
+  .fret-num.active { opacity: 1; font-weight: 700; fill: var(--ink); }
+</style>
+</head>
+<body>
+  <h1>Guitar Flash</h1>
+  <p class="sub">Name the note at the dot · C major · frets 0–12</p>
+
+  <div class="levels" id="levels"></div>
+
+  <div class="stats">
+    <div class="stat"><b id="correct">0</b><span>Correct</span></div>
+    <div class="stat"><b id="total">0</b><span>Attempts</span></div>
+    <div class="stat"><b id="streak">0</b><span>Streak</span></div>
+  </div>
+
+  <div class="board-wrap"><svg id="board" viewBox="0 0 1100 260" aria-label="Guitar fretboard"></svg></div>
+
+  <div class="feedback" id="feedback" aria-live="polite"></div>
+  <div class="notes" id="notes"></div>
+  <p class="hint">Type <kbd>A</kbd>–<kbd>G</kbd> or click a note. Press <kbd>Enter</kbd> to skip ahead after answering.</p>
+
+<script>
+  // ---- Music data ----
+  const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  const C_MAJOR = ["C", "D", "E", "F", "G", "A", "B"];
+  const MAX_FRET = 12;
+  const OPEN_STRING_CHANCE = 0.25;
+  const ALL_FRETS = Array.from({ length: MAX_FRET + 1 }, (_, f) => f);
+  const LEVELS = [
+    { name: "Open only", frets: [0] },
+    { name: "5th only", frets: [5] },
+    { name: "Open + 5th", frets: [0, 5] },
+    { name: "+ 7th", frets: [0, 5, 7] },
+    { name: "+ 3rd", frets: [0, 3, 5, 7] },
+    { name: "Everything", frets: ALL_FRETS },
+  ];
+  // Strings top-to-bottom as drawn (high E on top, like tab). Value = semitone of open string.
+  const STRINGS = [
+    { name: "e", open: 4, gauge: 1.2 },
+    { name: "B", open: 11, gauge: 1.5 },
+    { name: "G", open: 7, gauge: 1.9 },
+    { name: "D", open: 2, gauge: 2.4 },
+    { name: "A", open: 9, gauge: 2.9 },
+    { name: "E", open: 4, gauge: 3.4 },
+  ];
+
+  const noteAt = (stringIdx, fret) => NOTE_NAMES[(STRINGS[stringIdx].open + fret) % 12];
+
+  // Every position (fret 0–12) whose note is in C major.
+  const POSITIONS = [];
+  STRINGS.forEach((_, s) => {
+    for (let f = 0; f <= MAX_FRET; f++) {
+      const note = noteAt(s, f);
+      if (C_MAJOR.includes(note)) POSITIONS.push({ string: s, fret: f, note });
+    }
+  });
+
+  // ---- Fretboard geometry ----
+  const svg = document.getElementById("board");
+  const NS = "http://www.w3.org/2000/svg";
+  const OPEN_W = 60;           // space left of the nut for open strings
+  const LEFT = 30 + OPEN_W;    // x of the nut
+  const RIGHT = 1080;          // x of fret 12
+  const TOP = 30, BOTTOM = 210;
+  const stringY = (s) => TOP + (s * (BOTTOM - TOP)) / (STRINGS.length - 1);
+
+  // Real guitar fret spacing, normalized so fret 12 lands at RIGHT.
+  const fretX = (n) => {
+    const pos = 1 - Math.pow(2, -n / 12);
+    const end = 1 - Math.pow(2, -MAX_FRET / 12);
+    return LEFT + (pos / end) * (RIGHT - LEFT);
+  };
+  const dotX = (fret) => (fret === 0 ? LEFT - OPEN_W / 2 : (fretX(fret - 1) + fretX(fret)) / 2);
+
+  function el(tag, attrs, parent = svg) {
+    const node = document.createElementNS(NS, tag);
+    for (const k in attrs) node.setAttribute(k, attrs[k]);
+    parent.appendChild(node);
+    return node;
+  }
+
+  function drawBoard() {
+    const pad = 14;
+    // Fingerboard wood
+    el("rect", { x: LEFT, y: TOP - pad, width: RIGHT - LEFT, height: BOTTOM - TOP + pad * 2, fill: "var(--wood)", rx: 3 });
+
+    // Inlays
+    const midY = (TOP + BOTTOM) / 2;
+    [3, 5, 7, 9].forEach((f) => el("circle", { cx: dotX(f), cy: midY, r: 8, fill: "var(--inlay)", opacity: 0.85 }));
+    el("circle", { cx: dotX(12), cy: (stringY(1) + stringY(2)) / 2, r: 8, fill: "var(--inlay)", opacity: 0.85 });
+    el("circle", { cx: dotX(12), cy: (stringY(3) + stringY(4)) / 2, r: 8, fill: "var(--inlay)", opacity: 0.85 });
+
+    // Frets + numbers
+    for (let f = 1; f <= MAX_FRET; f++) {
+      el("line", { x1: fretX(f), y1: TOP - pad, x2: fretX(f), y2: BOTTOM + pad, stroke: "var(--fret)", "stroke-width": 3 });
+    }
+    ALL_FRETS.forEach((f) => {
+      const t = el("text", { id: `fretNum${f}`, class: "fret-num", x: dotX(f), y: BOTTOM + pad + 22, "text-anchor": "middle", "font-size": 13 });
+      t.textContent = f;
+    });
+
+    // Nut
+    el("rect", { x: LEFT - 6, y: TOP - pad, width: 7, height: BOTTOM - TOP + pad * 2, fill: "#ece6da", rx: 1 });
+
+    // Strings
+    STRINGS.forEach((s, i) => {
+      const y = stringY(i);
+      el("line", { x1: LEFT - OPEN_W, y1: y, x2: RIGHT, y2: y, stroke: "var(--string)", "stroke-width": s.gauge });
+    });
+
+    // The quiz dot (on top of everything)
+    const g = el("g", { id: "dotGroup" });
+    el("circle", { id: "dot", r: 13, fill: "var(--accent)", stroke: "#fff", "stroke-width": 2.5 }, g);
+    el("text", { id: "dotLabel", "text-anchor": "middle", "font-size": 14, "font-weight": 700, fill: "#fff", dy: 5 }, g);
+  }
+
+  // ---- Game state ----
+  let current = null;
+  let answered = false;
+  let advanceTimer = null;
+  const stats = { correct: 0, total: 0, streak: 0 };
+  let level = 0;
+  try { level = Math.min(LEVELS.length - 1, Math.max(0, parseInt(localStorage.getItem("guitarFlashLevel"), 10) || 0)); } catch {}
+
+  const $ = (id) => document.getElementById(id);
+  const buttons = {};
+
+  function buildButtons() {
+    C_MAJOR.forEach((n) => {
+      const b = document.createElement("button");
+      b.textContent = n;
+      b.addEventListener("click", () => answer(n));
+      $("notes").appendChild(b);
+      buttons[n] = b;
+    });
+  }
+
+  const levelButtons = [];
+  function buildLevels() {
+    LEVELS.forEach((lv, i) => {
+      const b = document.createElement("button");
+      b.textContent = `${String.fromCharCode(65 + i)}. ${lv.name}`;
+      b.addEventListener("click", () => { setLevel(i); nextQuestion(); });
+      $("levels").appendChild(b);
+      levelButtons.push(b);
+    });
+  }
+
+  function setLevel(i) {
+    level = i;
+    try { localStorage.setItem("guitarFlashLevel", i); } catch {}
+    levelButtons.forEach((b, j) => b.classList.toggle("active", j === i));
+    ALL_FRETS.forEach((f) => $(`fretNum${f}`).classList.toggle("active", LEVELS[i].frets.includes(f)));
+  }
+
+  function nextQuestion() {
+    clearTimeout(advanceTimer);
+    // Open strings come up at least ~25% of the time; otherwise a fretted note from this level.
+    const frets = LEVELS[level].frets;
+    const openChance = frets.includes(0) ? Math.max(OPEN_STRING_CHANCE, 1 / frets.length) : 0;
+    const pool = Math.random() < openChance
+      ? POSITIONS.filter((p) => p.fret === 0)
+      : POSITIONS.filter((p) => p.fret > 0 && frets.includes(p.fret));
+    let pick;
+    do {
+      pick = pool[Math.floor(Math.random() * pool.length)];
+    } while (current && pick.string === current.string && pick.fret === current.fret);
+    current = pick;
+    answered = false;
+
+    const g = $("dotGroup");
+    g.setAttribute("transform", `translate(${dotX(pick.fret)} ${stringY(pick.string)})`);
+    $("dot").setAttribute("fill", "var(--accent)");
+    $("dotLabel").textContent = "";
+    $("feedback").textContent = "";
+    $("feedback").className = "feedback";
+    Object.values(buttons).forEach((b) => { b.className = ""; b.disabled = false; });
+  }
+
+  function answer(note) {
+    if (answered || !current) return;
+    answered = true;
+    const ok = note === current.note;
+
+    stats.total++;
+    if (ok) { stats.correct++; stats.streak++; } else { stats.streak = 0; }
+    $("correct").textContent = stats.correct;
+    $("total").textContent = stats.total;
+    $("streak").textContent = stats.streak;
+
+    $("dot").setAttribute("fill", ok ? "var(--right)" : "var(--wrong)");
+    $("dotLabel").textContent = current.note;
+
+    const fb = $("feedback");
+    const where = `${STRINGS[current.string].name} string, ${current.fret === 0 ? "open" : "fret " + current.fret}`;
+    fb.textContent = ok ? `✓ Correct — ${current.note}` : `✗ Not ${note} — it's ${current.note} (${where})`;
+    fb.className = "feedback " + (ok ? "right" : "wrong");
+
+    Object.values(buttons).forEach((b) => (b.disabled = true));
+    buttons[current.note].className = "right";
+    if (!ok) buttons[note].className = "wrong";
+
+    advanceTimer = setTimeout(nextQuestion, ok ? 900 : 2200);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (answered && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      nextQuestion();
+      return;
+    }
+    const k = e.key.toUpperCase();
+    if (C_MAJOR.includes(k)) answer(k);
+  });
+
+  drawBoard();
+  buildButtons();
+  buildLevels();
+  setLevel(level);
+  nextQuestion();
+</script>
+</body>
+</html>
