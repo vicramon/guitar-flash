@@ -201,7 +201,7 @@
   const buttons = {};
 
   function buildButtons() {
-    C_MAJOR.forEach((n) => {
+    [...C_MAJOR].sort().forEach((n) => { // A–G order
       const b = document.createElement("button");
       b.textContent = n;
       b.addEventListener("click", () => answer(n));
